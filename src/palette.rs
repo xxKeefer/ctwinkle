@@ -17,6 +17,12 @@ pub enum Palette {
 const CHRISTMAS: [Color; 3] = [Color::Red, Color::Green, Color::White];
 
 impl Palette {
+    // The `c` key steps through the palettes in declared order, and wraps.
+    pub fn next(self) -> Self {
+        let all = Self::value_variants();
+        all[(self as usize + 1) % all.len()]
+    }
+
     // Christmas picks by the star key, so a falling star keeps its colour.
     pub fn color(self, key: u32) -> Color {
         match self {
@@ -69,6 +75,13 @@ mod tests {
         for name in ["purple", ""] {
             assert!(Palette::from_str(name, false).is_err(), "{name:?}");
         }
+    }
+
+    #[test]
+    fn next_steps_in_order_and_wraps() {
+        assert_eq!(Palette::Green.next(), Palette::Red);
+        assert_eq!(Palette::Black.next(), Palette::Christmas);
+        assert_eq!(Palette::Christmas.next(), Palette::Green);
     }
 
     #[test]

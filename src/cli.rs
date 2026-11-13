@@ -26,9 +26,14 @@ pub struct Args {
     pub density: u8,
 }
 
+// Speed 0 to 9 gives the frame delay. The `0`-`9` keys use the same map.
+pub fn delay(speed: u8) -> Duration {
+    Duration::from_millis(20 + 30 * u64::from(speed))
+}
+
 impl Args {
     pub fn delay(&self) -> Duration {
-        Duration::from_millis(20 + 30 * u64::from(self.speed))
+        delay(self.speed)
     }
 
     pub fn palette(&self) -> Palette {

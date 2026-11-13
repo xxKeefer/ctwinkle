@@ -34,18 +34,16 @@ fn main() -> io::Result<()> {
 
     let mut guard = term::Guard::new(BufWriter::new(io::stdout()))?;
     terminal::enable_raw_mode()?;
-    app::run(
-        guard.out(),
-        &mut field,
-        args.palette(),
-        args.delay(),
-        &stop,
-        |timeout| {
-            if event::poll(timeout)? {
-                event::read().map(Some)
-            } else {
-                Ok(None)
-            }
-        },
-    )
+    let mut app = app::App {
+        field,
+        palette: args.palette(),
+        frame: args.delay(),
+    };
+    app::run(guard.out(), &mut app, &stop, |timeout| {
+        if event::poll(timeout)? {
+            event::read().map(Some)
+        } else {
+            Ok(None)
+        }
+    })
 }
