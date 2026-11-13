@@ -1,7 +1,8 @@
 use crate::field::{Field, Level};
+use crate::palette::Palette;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
-use crossterm::style::Print;
+use crossterm::style::{Print, SetForegroundColor};
 use std::io::{self, Write};
 
 // Glyph groups from dim to bright, one per `Level`.
@@ -29,9 +30,16 @@ pub fn frame(field: &Field) -> Vec<String> {
     grid.into_iter().map(String::from_iter).collect()
 }
 
-pub fn draw<W: Write>(out: &mut W, rows: &[String]) -> io::Result<()> {
+pub fn draw<W: Write>(out: &mut W, rows: &[String], palette: Palette) -> io::Result<()> {
     for (y, row) in rows.iter().enumerate() {
-        queue!(out, MoveTo(0, y as u16), Print(row))?;
+        let y = y as u16;
+        queue!(out, MoveTo(0, y))?;
+        for (x, c) in row.chars().enumerate() {
+            if c != ' ' {
+                queue!(out, SetForegroundColor(palette.color(x as u16, y)))?;
+            }
+            queue!(out, Print(c))?;
+        }
     }
     out.flush()
 }
@@ -99,13 +107,36 @@ mod tests {
         assert_eq!(lit, f.stars().len());
     }
 
+    fn fg(c: crossterm::style::Color) -> String {
+        let mut b = Vec::new();
+        queue!(b, crossterm::style::SetForegroundColor(c)).unwrap();
+        String::from_utf8(b).unwrap()
+    }
+
     #[test]
     fn draw_positions_each_row() {
-        let rows = vec!["ab".to_string(), "cd".to_string()];
+        let rows = vec!["a ".to_string(), " d".to_string()];
         let mut buf = Vec::new();
-        draw(&mut buf, &rows).unwrap();
+        draw(&mut buf, &rows, Palette::White).unwrap();
         let s = String::from_utf8_lossy(&buf);
-        assert!(s.contains("\x1b[1;1Hab"), "{s:?}");
-        assert!(s.contains("\x1b[2;1Hcd"), "{s:?}");
+        let white = fg(crossterm::style::Color::White);
+        assert!(s.contains(&format!("\x1b[1;1H{white}a ")), "{s:?}");
+        assert!(s.contains(&format!("\x1b[2;1H {white}d")), "{s:?}");
+    }
+
+    #[test]
+    fn draw_colours_each_star_by_its_cell() {
+        let rows: Vec<String> = (0..10).map(|_| "*".repeat(10)).collect();
+        let mut buf = Vec::new();
+        draw(&mut buf, &rows, Palette::Christmas).unwrap();
+        let s = String::from_utf8_lossy(&buf);
+        for y in 0..10u16 {
+            let mut row = format!("\x1b[{};1H", y + 1);
+            for x in 0..10u16 {
+                row.push_str(&fg(Palette::Christmas.color(x, y)));
+                row.push('*');
+            }
+            assert!(s.contains(&row), "row {y}: {s:?}");
+        }
     }
 }

@@ -2,6 +2,7 @@ mod app;
 mod cli;
 mod field;
 mod input;
+mod palette;
 mod render;
 mod term;
 
@@ -17,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DENSITY: u8 = 5;
 
 fn main() -> io::Result<()> {
-    let _args = cli::Args::parse();
+    let args = cli::Args::parse();
 
     let stop = Arc::new(AtomicBool::new(false));
     for sig in [SIGTERM, SIGHUP, SIGINT] {
@@ -32,7 +33,7 @@ fn main() -> io::Result<()> {
 
     let mut guard = term::Guard::new(BufWriter::new(io::stdout()))?;
     terminal::enable_raw_mode()?;
-    app::run(guard.out(), &mut field, &stop, |timeout| {
+    app::run(guard.out(), &mut field, args.palette(), &stop, |timeout| {
         if event::poll(timeout)? {
             event::read().map(Some)
         } else {

@@ -10,6 +10,8 @@ fn help_names_program_and_succeeds() {
         .success()
         .stdout(contains("Usage: ctwinkle"))
         .stdout(contains("--help"))
+        .stdout(contains("-C, --colour"))
+        .stdout(contains("--christmas"))
         .stdout(contains("--version"));
 }
 
@@ -21,4 +23,15 @@ fn unknown_flag_fails() {
         .assert()
         .failure()
         .stderr(contains("--nope"));
+}
+
+#[test]
+fn unknown_colour_fails_before_terminal_changes() {
+    Command::cargo_bin("ctwinkle")
+        .unwrap()
+        .args(["-C", "purple"])
+        .assert()
+        .failure()
+        .stderr(contains("purple"))
+        .stdout(predicates::str::is_empty());
 }

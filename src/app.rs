@@ -1,5 +1,6 @@
 use crate::field::Field;
 use crate::input::{map_key, Action};
+use crate::palette::Palette;
 use crate::render;
 use crossterm::event::Event;
 use std::io::{self, Write};
@@ -12,11 +13,12 @@ pub const FRAME: Duration = Duration::from_millis(80);
 pub fn run<W: Write>(
     out: &mut W,
     field: &mut Field,
+    palette: Palette,
     stop: &AtomicBool,
     mut poll: impl FnMut(Duration) -> io::Result<Option<Event>>,
 ) -> io::Result<()> {
     while !stop.load(Ordering::Relaxed) {
-        render::draw(out, &render::frame(field))?;
+        render::draw(out, &render::frame(field), palette)?;
         let end = Instant::now() + FRAME;
         while let Some(event) = poll(end.saturating_duration_since(Instant::now()))? {
             match event {
@@ -46,7 +48,7 @@ mod tests {
         let mut field = Field::new(10, 5, 10, 1);
         let mut out = Vec::new();
         let mut calls = 0;
-        run(&mut out, &mut field, &stop, |_| {
+        run(&mut out, &mut field, Palette::White, &stop, |_| {
             calls += 1;
             assert!(calls < LIMIT, "loop did not stop");
             if calls == 3 {
@@ -64,7 +66,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut field = Field::new(10, 5, 10, 1);
         let mut calls = 0;
-        run(&mut Vec::new(), &mut field, &stop, |_| {
+        run(&mut Vec::new(), &mut field, Palette::White, &stop, |_| {
             calls += 1;
             assert!(calls < LIMIT, "loop did not stop");
             Ok(Some(Event::Key(KeyEvent::new(
@@ -81,7 +83,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut field = Field::new(10, 5, 10, 1);
         let mut calls = 0;
-        run(&mut Vec::new(), &mut field, &stop, |_| {
+        run(&mut Vec::new(), &mut field, Palette::White, &stop, |_| {
             calls += 1;
             assert!(calls < LIMIT, "loop did not stop");
             if calls == 5 {
@@ -102,7 +104,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut field = Field::new(10, 5, 10, 1);
         let mut calls = 0;
-        run(&mut Vec::new(), &mut field, &stop, |_| {
+        run(&mut Vec::new(), &mut field, Palette::White, &stop, |_| {
             calls += 1;
             assert!(calls < LIMIT, "loop did not stop");
             if calls == 1 {
