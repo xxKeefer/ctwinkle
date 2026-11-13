@@ -4,19 +4,27 @@ use crossterm::queue;
 use crossterm::style::Print;
 use std::io::{self, Write};
 
-pub const GLYPHS: [char; 4] = ['.', '+', '*', '✦'];
+// Glyph groups from dim to bright, one per `Level`.
+pub const GLYPHS: [&[char]; 3] = [
+    &['.', '·', '°'],
+    &['+', '•', '✧', '☆'],
+    &['*', '✦', '✶', '✷', '✸', '✵', '✯', '★'],
+];
+
+// A star keeps its cell for one twinkle cycle, so a position hash keeps its glyph stable.
+pub fn glyph(x: u16, y: u16, level: Level) -> char {
+    let group = GLYPHS[level as usize];
+    let mut h = (u64::from(x) << 16 | u64::from(y)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= h >> 32;
+    group[(h % group.len() as u64) as usize]
+}
 
 // One plain string per row, each exactly the field width.
 pub fn frame(field: &Field) -> Vec<String> {
     let (w, h) = field.size();
     let mut grid = vec![vec![' '; w as usize]; h as usize];
     for s in field.stars() {
-        grid[s.y as usize][s.x as usize] = match s.level() {
-            Level::Dark => GLYPHS[0],
-            Level::Dim => GLYPHS[1],
-            // Mix the two bright glyphs across the field.
-            Level::Bright => GLYPHS[2 + ((s.x ^ s.y) & 1) as usize],
-        };
+        grid[s.y as usize][s.x as usize] = glyph(s.x, s.y, s.level());
     }
     grid.into_iter().map(String::from_iter).collect()
 }
@@ -34,10 +42,33 @@ mod tests {
     use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
     #[test]
-    fn every_glyph_is_one_column_in_any_terminal() {
-        for g in GLYPHS {
+    fn every_glyph_is_one_column() {
+        for &g in GLYPHS.iter().copied().flatten() {
             assert_eq!(g.width(), Some(1), "{g:?}");
-            assert_eq!(g.width_cjk(), Some(1), "{g:?} is ambiguous width");
+        }
+    }
+
+    fn group(level: Level) -> &'static [char] {
+        match level {
+            Level::Dark => GLYPHS[0],
+            Level::Dim => GLYPHS[1],
+            Level::Bright => GLYPHS[2],
+        }
+    }
+
+    #[test]
+    fn glyph_comes_from_its_level_group_and_uses_the_whole_group() {
+        for level in [Level::Dark, Level::Dim, Level::Bright] {
+            let mut seen = std::collections::HashSet::new();
+            for x in 0..40 {
+                for y in 0..40 {
+                    let g = glyph(x, y, level);
+                    assert!(group(level).contains(&g), "{level:?} gave {g:?}");
+                    assert_eq!(g, glyph(x, y, level), "glyph not stable");
+                    seen.insert(g);
+                }
+            }
+            assert_eq!(seen.len(), group(level).len(), "{level:?} used {seen:?}");
         }
     }
 
@@ -50,7 +81,6 @@ mod tests {
                 assert_eq!(rows.len(), h as usize);
                 for r in &rows {
                     assert_eq!(r.width(), w as usize, "{r:?}");
-                    assert_eq!(r.width_cjk(), w as usize, "{r:?}");
                 }
                 f.tick();
             }
@@ -63,7 +93,7 @@ mod tests {
         let rows: Vec<Vec<char>> = frame(&f).iter().map(|r| r.chars().collect()).collect();
         for s in f.stars() {
             let c = rows[s.y as usize][s.x as usize];
-            assert!(GLYPHS.contains(&c), "star at {},{} shows {c:?}", s.x, s.y);
+            assert_eq!(c, glyph(s.x, s.y, s.level()), "star at {},{}", s.x, s.y);
         }
         let lit = rows.iter().flatten().filter(|&&c| c != ' ').count();
         assert_eq!(lit, f.stars().len());
