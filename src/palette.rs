@@ -1,3 +1,4 @@
+use crate::field::pick;
 use clap::ValueEnum;
 use crossterm::style::Color;
 
@@ -34,11 +35,7 @@ impl Palette {
             Palette::Cyan => Color::Cyan,
             Palette::Magenta => Color::Magenta,
             Palette::Black => Color::Black,
-            Palette::Christmas => {
-                let mut h = u64::from(key).wrapping_mul(0xD6E8_FEB8_6659_FD93);
-                h ^= h >> 32;
-                CHRISTMAS[(h % CHRISTMAS.len() as u64) as usize]
-            }
+            Palette::Christmas => pick(key, 0xD6E8_FEB8_6659_FD93, &CHRISTMAS),
         }
     }
 }

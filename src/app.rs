@@ -214,11 +214,10 @@ mod tests {
     #[test]
     fn speed_action_sets_frame_delay() {
         let mut app = app(FRAME);
-        for n in 0..=9 {
+        for (n, ms) in [(0, 20), (4, 140), (9, 290)] {
             assert!(app.apply(Action::Speed(n)));
-            assert_eq!(app.frame, cli::delay(n), "speed {n}");
+            assert_eq!(app.frame, Duration::from_millis(ms), "speed {n}");
         }
-        assert_eq!(app.frame, Duration::from_millis(290));
     }
 
     #[test]

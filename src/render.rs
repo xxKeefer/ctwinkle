@@ -1,4 +1,4 @@
-use crate::field::{Field, Level, Star};
+use crate::field::{pick, Field, Level, Star};
 use crate::palette::Palette;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
@@ -14,10 +14,7 @@ pub const GLYPHS: [&[char]; 3] = [
 
 // Keyed on the star, not its cell, so a falling star keeps its glyph.
 pub fn glyph(key: u32, level: Level) -> char {
-    let group = GLYPHS[level as usize];
-    let mut h = u64::from(key).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    h ^= h >> 32;
-    group[(h % group.len() as u64) as usize]
+    pick(key, 0x9E37_79B9_7F4A_7C15, GLYPHS[level as usize])
 }
 
 fn grid(field: &Field) -> Vec<Vec<Option<&Star>>> {
@@ -29,26 +26,18 @@ fn grid(field: &Field) -> Vec<Vec<Option<&Star>>> {
     grid
 }
 
-// One plain string per row, each exactly the field width.
-pub fn frame(field: &Field) -> Vec<String> {
-    grid(field)
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .map(|s| s.map_or(' ', |s| glyph(s.key(), s.level())))
-                .collect()
-        })
-        .collect()
-}
-
 pub fn draw<W: Write>(out: &mut W, field: &Field, palette: Palette) -> io::Result<()> {
-    for (y, (row, stars)) in frame(field).iter().zip(grid(field)).enumerate() {
+    for (y, row) in grid(field).into_iter().enumerate() {
         queue!(out, MoveTo(0, y as u16))?;
-        for (c, star) in row.chars().zip(stars) {
-            if let Some(s) = star {
-                queue!(out, SetForegroundColor(palette.color(s.key())))?;
+        for star in row {
+            match star {
+                Some(s) => queue!(
+                    out,
+                    SetForegroundColor(palette.color(s.key())),
+                    Print(glyph(s.key(), s.level()))
+                )?,
+                None => queue!(out, Print(' '))?,
             }
-            queue!(out, Print(c))?;
         }
     }
     out.flush()
@@ -60,6 +49,18 @@ mod tests {
     use crate::field::Mode;
     use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+    // One plain string per row, each exactly the field width.
+    fn frame(field: &Field) -> Vec<String> {
+        grid(field)
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|s| s.map_or(' ', |s| glyph(s.key(), s.level())))
+                    .collect()
+            })
+            .collect()
+    }
+
     #[test]
     fn every_glyph_is_one_column() {
         for &g in GLYPHS.iter().copied().flatten() {
@@ -69,9 +70,9 @@ mod tests {
 
     fn group(level: Level) -> &'static [char] {
         match level {
-            Level::Dark => GLYPHS[0],
-            Level::Dim => GLYPHS[1],
-            Level::Bright => GLYPHS[2],
+            Level::Dark => &['.', '·', '°'],
+            Level::Dim => &['+', '•', '✧', '☆'],
+            Level::Bright => &['*', '✦', '✶', '✷', '✸', '✵', '✯', '★'],
         }
     }
 
@@ -98,6 +99,14 @@ mod tests {
                 assert_eq!(rows.len(), h as usize);
                 for r in &rows {
                     assert_eq!(r.width(), w as usize, "{r:?}");
+                }
+                let mut buf = Vec::new();
+                draw(&mut buf, &f, Palette::White).unwrap();
+                let drawn = cells(&buf);
+                assert_eq!(drawn.len(), h as usize);
+                for r in &drawn {
+                    let s: String = r.iter().map(|c| c.1).collect();
+                    assert_eq!(s.width(), w as usize, "{s:?}");
                 }
                 f.tick();
             }
@@ -149,6 +158,19 @@ mod tests {
                 assert!(s.contains(&expected_row(&f, y, palette)), "row {y}: {s:?}");
             }
         }
+    }
+
+    #[test]
+    fn draw_writes_the_literal_colour_and_a_glyph_of_the_star_level() {
+        let f = Field::new(1, 1, 100, 5);
+        let mut buf = Vec::new();
+        draw(&mut buf, &f, Palette::Green).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        let g = s.strip_prefix("\x1b[1;1H\x1b[38;5;10m").expect(&s);
+        let mut chars = g.chars();
+        let c = chars.next().unwrap();
+        assert_eq!(chars.next(), None, "{s:?}");
+        assert!(group(f.stars()[0].level()).contains(&c), "{c:?}");
     }
 
     // Reads `draw` output back into (colour escape, glyph) per cell.

@@ -39,6 +39,13 @@ impl Star {
     }
 }
 
+// Picks one item by a multiply hash of the star key. `salt` keeps two picks independent.
+pub fn pick<T: Copy>(key: u32, salt: u64, items: &[T]) -> T {
+    let mut h = u64::from(key).wrapping_mul(salt);
+    h ^= h >> 32;
+    items[(h % items.len() as u64) as usize]
+}
+
 pub struct Field {
     w: u16,
     h: u16,
@@ -84,46 +91,60 @@ impl Field {
 
     pub fn tick(&mut self) {
         for i in 0..self.stars.len() {
-            if self.stars[i].wait > 0 {
-                self.stars[i].wait -= 1;
-                continue;
-            }
-            let wait = self.next_wait();
-            let star = &mut self.stars[i];
-            star.wait = wait;
-            if (star.stage as usize) < CYCLE.len() - 1 {
-                star.stage += 1;
-                continue;
-            }
-            star.stage = 0;
             // A rain star repeats its cycle while it falls.
-            if self.mode == Mode::Rain {
-                continue;
+            if self.advance(i) && self.mode == Mode::Twinkle {
+                self.relocate(i);
             }
-            let old = self.index(self.stars[i].x, self.stars[i].y);
-            self.taken[old] = false;
-            let (x, y) = self.free_cell();
-            let key = self.next_key();
-            let star = &mut self.stars[i];
-            star.x = x;
-            star.y = y;
-            star.key = key;
         }
         if self.mode == Mode::Rain {
             self.fall();
         }
     }
 
+    // Moves the star one tick through its cycle. Gives true when the cycle wraps to the start.
+    fn advance(&mut self, i: usize) -> bool {
+        if self.stars[i].wait > 0 {
+            self.stars[i].wait -= 1;
+            return false;
+        }
+        let wait = self.next_wait();
+        let star = &mut self.stars[i];
+        star.wait = wait;
+        if (star.stage as usize) < CYCLE.len() - 1 {
+            star.stage += 1;
+            return false;
+        }
+        star.stage = 0;
+        true
+    }
+
+    fn relocate(&mut self, i: usize) {
+        let old = self.index(self.stars[i].x, self.stars[i].y);
+        self.taken[old] = false;
+        let (x, y) = self.free_cell();
+        self.respawn(i, x, y, 0);
+    }
+
+    // Puts the star at (x, y) as a new star, with a new key.
+    fn respawn(&mut self, i: usize, x: u16, y: u16, stage: u8) {
+        let key = self.next_key();
+        let star = &mut self.stars[i];
+        star.x = x;
+        star.y = y;
+        star.stage = stage;
+        star.key = key;
+    }
+
     // Every star moves down one row. A star that leaves the bottom row comes back as a new
     // star at row 0. Row 0 is empty after the move, so each new star finds a free column.
     fn fall(&mut self) {
         self.taken.fill(false);
+        let (w, h) = (self.w as usize, self.h);
         let mut gone = Vec::new();
-        for i in 0..self.stars.len() {
-            self.stars[i].y += 1;
-            if self.stars[i].y < self.h {
-                let c = self.index(self.stars[i].x, self.stars[i].y);
-                self.taken[c] = true;
+        for (i, s) in self.stars.iter_mut().enumerate() {
+            s.y += 1;
+            if s.y < h {
+                self.taken[s.y as usize * w + s.x as usize] = true;
             } else {
                 gone.push(i);
             }
@@ -131,25 +152,13 @@ impl Field {
         for i in gone {
             let x = self.free_column();
             let stage = self.below(CYCLE.len() as u32) as u8;
-            let key = self.next_key();
-            let star = &mut self.stars[i];
-            star.x = x;
-            star.y = 0;
-            star.stage = stage;
-            star.key = key;
+            self.respawn(i, x, 0, stage);
         }
     }
 
     // Claims a random free cell in row 0. The caller ensures one exists.
     fn free_column(&mut self) -> u16 {
-        let w = self.w as usize;
-        let start = self.below(w as u32) as usize;
-        let x = (0..w)
-            .map(|k| (start + k) % w)
-            .find(|&c| !self.taken[c])
-            .expect("no free column");
-        self.taken[x] = true;
-        x as u16
+        self.claim_free(self.w as usize) as u16
     }
 
     pub fn resize(&mut self, w: u16, h: u16) {
@@ -193,17 +202,22 @@ impl Field {
 
     // Claims a random free cell. The caller ensures one exists.
     fn free_cell(&mut self) -> (u16, u16) {
-        let n = self.taken.len();
+        let cell = self.claim_free(self.taken.len());
+        (
+            (cell % self.w as usize) as u16,
+            (cell / self.w as usize) as u16,
+        )
+    }
+
+    // Claims a random free cell among the first `n` cells, from a random start.
+    fn claim_free(&mut self, n: usize) -> usize {
         let start = self.below(n as u32) as usize;
         let cell = (0..n)
             .map(|k| (start + k) % n)
             .find(|&c| !self.taken[c])
             .expect("no free cell");
         self.taken[cell] = true;
-        (
-            (cell % self.w as usize) as u16,
-            (cell / self.w as usize) as u16,
-        )
+        cell
     }
 
     fn next_wait(&mut self) -> u8 {
@@ -233,7 +247,10 @@ mod tests {
     fn assert_valid(f: &Field) {
         let mut seen = HashSet::new();
         for s in f.stars() {
-            assert!(s.x < f.w && s.y < f.h, "star out of bounds: {s:?}");
+            assert!(
+                s.x < f.size().0 && s.y < f.size().1,
+                "star out of bounds: {s:?}"
+            );
             assert!(seen.insert((s.x, s.y)), "two stars share a cell: {s:?}");
         }
     }
@@ -247,36 +264,38 @@ mod tests {
         assert_eq!(Field::new(10, 10, 100, 1).stars().len(), 100);
     }
 
+    // A respawn gives the star a new key. Record the levels of one full life, from one
+    // respawn to the next.
     #[test]
     fn star_cycles_dark_dim_bright_dim_dark_then_respawns() {
         let mut f = Field::new(10, 10, 1, 7);
-        f.stars[0].stage = 0;
-        f.stars[0].wait = 0;
-        let mut levels = vec![f.stars[0].level()];
-        let mut moved = false;
-        for _ in 0..200 {
-            let before = (f.stars[0].stage, f.stars[0].x, f.stars[0].y);
+        let mut key = f.stars()[0].key();
+        let mut lives = Vec::new();
+        let mut levels = Vec::new();
+        for _ in 0..500 {
             f.tick();
-            let s = &f.stars[0];
-            if before.0 == 4 && s.stage == 0 {
-                moved = true;
-                break;
+            let s = &f.stars()[0];
+            if s.key() != key {
+                key = s.key();
+                lives.push(std::mem::take(&mut levels));
             }
             if levels.last() != Some(&s.level()) {
                 levels.push(s.level());
             }
         }
-        assert!(moved, "star never respawned");
-        assert_eq!(
-            levels,
-            [
-                Level::Dark,
-                Level::Dim,
-                Level::Bright,
-                Level::Dim,
-                Level::Dark
-            ]
-        );
+        assert!(lives.len() >= 3, "star respawned {} times", lives.len());
+        for life in &lives[1..] {
+            assert_eq!(
+                life,
+                &[
+                    Level::Dark,
+                    Level::Dim,
+                    Level::Bright,
+                    Level::Dim,
+                    Level::Dark
+                ]
+            );
+        }
     }
 
     #[test]
@@ -350,7 +369,7 @@ mod tests {
             assert_eq!(f.stars().len(), before.len());
             assert_valid(&f);
             for (s, &(x, y, key)) in f.stars().iter().zip(&before) {
-                if y + 1 < f.h {
+                if y + 1 < f.size().1 {
                     assert_eq!((s.x, s.y, s.key()), (x, y + 1, key), "star did not fall");
                 } else {
                     assert_eq!(s.y, 0, "new star entered below row 0");
@@ -379,7 +398,7 @@ mod tests {
         let levels: HashSet<_> = (0..40)
             .map(|_| {
                 f.tick();
-                f.stars[0].level()
+                f.stars()[0].level()
             })
             .collect();
         assert_eq!(levels.len(), 3, "{levels:?}");
@@ -396,6 +415,20 @@ mod tests {
             f.resize(3, 3);
             f.tick();
             assert_valid(&f);
+        }
+    }
+
+    #[test]
+    fn twinkle_after_rain_keeps_one_star_per_cell() {
+        let mut f = rain(20, 10, 50, 3);
+        for _ in 0..5 {
+            f.tick();
+        }
+        f.set_mode(Mode::Twinkle);
+        for _ in 0..200 {
+            f.tick();
+            assert_valid(&f);
+            assert_eq!(f.stars().len(), 100);
         }
     }
 }
