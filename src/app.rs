@@ -15,6 +15,18 @@ pub struct App {
 }
 
 impl App {
+    pub fn new(args: &cli::Args, w: u16, h: u16, seed: u64) -> Self {
+        let mut field = Field::new(w, h, args.density, seed);
+        if args.rain {
+            field.set_mode(Mode::Rain);
+        }
+        App {
+            field,
+            palette: args.palette(),
+            frame: args.delay(),
+        }
+    }
+
     // Gives false when the action ends the run.
     pub fn apply(&mut self, action: Action) -> bool {
         match action {
@@ -75,6 +87,31 @@ mod tests {
             palette: Palette::White,
             frame,
         }
+    }
+
+    fn from_args(args: &[&str]) -> App {
+        use clap::Parser;
+        let args = cli::Args::try_parse_from([&["ctwinkle"], args].concat()).unwrap();
+        App::new(&args, 10, 5, 1)
+    }
+
+    #[test]
+    fn new_takes_defaults_from_args() {
+        let app = from_args(&[]);
+        assert_eq!(app.field.mode(), Mode::Twinkle);
+        assert_eq!(app.palette, Palette::White);
+        assert_eq!(app.frame, Duration::from_millis(140));
+        assert_eq!(app.field.size(), (10, 5));
+    }
+
+    #[test]
+    fn new_takes_rain_palette_speed_and_density_from_args() {
+        let app = from_args(&["-r", "-C", "green", "-u", "0", "-d", "100"]);
+        assert_eq!(app.field.mode(), Mode::Rain);
+        assert_eq!(app.palette, Palette::Green);
+        assert_eq!(app.frame, Duration::from_millis(20));
+        assert_eq!(app.field.stars().len(), 50);
+        assert_eq!(from_args(&["--christmas"]).palette, Palette::Christmas);
     }
 
     fn key(c: char) -> Event {
