@@ -7,19 +7,18 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-pub const FRAME: Duration = Duration::from_millis(80);
-
 // `poll` waits up to the given time for one event, and gives None on timeout.
 pub fn run<W: Write>(
     out: &mut W,
     field: &mut Field,
     palette: Palette,
+    frame: Duration,
     stop: &AtomicBool,
     mut poll: impl FnMut(Duration) -> io::Result<Option<Event>>,
 ) -> io::Result<()> {
     while !stop.load(Ordering::Relaxed) {
         render::draw(out, field, palette)?;
-        let end = Instant::now() + FRAME;
+        let end = Instant::now() + frame;
         while let Some(event) = poll(end.saturating_duration_since(Instant::now()))? {
             match event {
                 Event::Key(key) if map_key(key) == Some(Action::Quit) => return Ok(()),
@@ -41,6 +40,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     const LIMIT: usize = 100;
+    const FRAME: Duration = Duration::from_millis(80);
 
     #[test]
     fn stop_flag_ends_loop_on_next_tick() {
@@ -48,7 +48,7 @@ mod tests {
         let mut field = Field::new(10, 5, 10, 1);
         let mut out = Vec::new();
         let mut calls = 0;
-        run(&mut out, &mut field, Palette::White, &stop, |_| {
+        run(&mut out, &mut field, Palette::White, FRAME, &stop, |_| {
             calls += 1;
             assert!(calls < LIMIT, "loop did not stop");
             if calls == 3 {
@@ -66,14 +66,21 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut field = Field::new(10, 5, 10, 1);
         let mut calls = 0;
-        run(&mut Vec::new(), &mut field, Palette::White, &stop, |_| {
-            calls += 1;
-            assert!(calls < LIMIT, "loop did not stop");
-            Ok(Some(Event::Key(KeyEvent::new(
-                KeyCode::Esc,
-                KeyModifiers::NONE,
-            ))))
-        })
+        run(
+            &mut Vec::new(),
+            &mut field,
+            Palette::White,
+            FRAME,
+            &stop,
+            |_| {
+                calls += 1;
+                assert!(calls < LIMIT, "loop did not stop");
+                Ok(Some(Event::Key(KeyEvent::new(
+                    KeyCode::Esc,
+                    KeyModifiers::NONE,
+                ))))
+            },
+        )
         .unwrap();
         assert_eq!(calls, 1);
     }
@@ -83,18 +90,25 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut field = Field::new(10, 5, 10, 1);
         let mut calls = 0;
-        run(&mut Vec::new(), &mut field, Palette::White, &stop, |_| {
-            calls += 1;
-            assert!(calls < LIMIT, "loop did not stop");
-            if calls == 5 {
-                stop.store(true, Ordering::Relaxed);
-                return Ok(None);
-            }
-            Ok(Some(Event::Key(KeyEvent::new(
-                KeyCode::Char('x'),
-                KeyModifiers::NONE,
-            ))))
-        })
+        run(
+            &mut Vec::new(),
+            &mut field,
+            Palette::White,
+            FRAME,
+            &stop,
+            |_| {
+                calls += 1;
+                assert!(calls < LIMIT, "loop did not stop");
+                if calls == 5 {
+                    stop.store(true, Ordering::Relaxed);
+                    return Ok(None);
+                }
+                Ok(Some(Event::Key(KeyEvent::new(
+                    KeyCode::Char('x'),
+                    KeyModifiers::NONE,
+                ))))
+            },
+        )
         .unwrap();
         assert_eq!(calls, 5);
     }
@@ -104,16 +118,46 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut field = Field::new(10, 5, 10, 1);
         let mut calls = 0;
-        run(&mut Vec::new(), &mut field, Palette::White, &stop, |_| {
-            calls += 1;
-            assert!(calls < LIMIT, "loop did not stop");
-            if calls == 1 {
-                return Ok(Some(Event::Resize(30, 20)));
-            }
-            stop.store(true, Ordering::Relaxed);
-            Ok(None)
-        })
+        run(
+            &mut Vec::new(),
+            &mut field,
+            Palette::White,
+            FRAME,
+            &stop,
+            |_| {
+                calls += 1;
+                assert!(calls < LIMIT, "loop did not stop");
+                if calls == 1 {
+                    return Ok(Some(Event::Resize(30, 20)));
+                }
+                stop.store(true, Ordering::Relaxed);
+                Ok(None)
+            },
+        )
         .unwrap();
         assert_eq!(field.size(), (30, 20));
+    }
+
+    #[test]
+    fn poll_waits_up_to_the_given_frame() {
+        let stop = AtomicBool::new(false);
+        let mut field = Field::new(10, 5, 10, 1);
+        let frame = Duration::from_millis(500);
+        let mut waits = Vec::new();
+        run(
+            &mut Vec::new(),
+            &mut field,
+            Palette::White,
+            frame,
+            &stop,
+            |t| {
+                waits.push(t);
+                assert!(waits.len() < LIMIT, "loop did not stop");
+                stop.store(true, Ordering::Relaxed);
+                Ok(None)
+            },
+        )
+        .unwrap();
+        assert!(waits[0] <= frame && waits[0] > frame / 2, "{:?}", waits[0]);
     }
 }

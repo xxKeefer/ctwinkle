@@ -15,8 +15,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DENSITY: u8 = 5;
-
 fn main() -> io::Result<()> {
     let args = cli::Args::parse();
 
@@ -29,18 +27,25 @@ fn main() -> io::Result<()> {
     let seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(1, |d| d.as_nanos() as u64);
-    let mut field = Field::new(w, h, DENSITY, seed);
+    let mut field = Field::new(w, h, args.density, seed);
     if args.rain {
         field.set_mode(Mode::Rain);
     }
 
     let mut guard = term::Guard::new(BufWriter::new(io::stdout()))?;
     terminal::enable_raw_mode()?;
-    app::run(guard.out(), &mut field, args.palette(), &stop, |timeout| {
-        if event::poll(timeout)? {
-            event::read().map(Some)
-        } else {
-            Ok(None)
-        }
-    })
+    app::run(
+        guard.out(),
+        &mut field,
+        args.palette(),
+        args.delay(),
+        &stop,
+        |timeout| {
+            if event::poll(timeout)? {
+                event::read().map(Some)
+            } else {
+                Ok(None)
+            }
+        },
+    )
 }
