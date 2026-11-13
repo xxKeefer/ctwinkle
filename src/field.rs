@@ -52,6 +52,10 @@ impl Field {
         f
     }
 
+    pub fn size(&self) -> (u16, u16) {
+        (self.w, self.h)
+    }
+
     pub fn stars(&self) -> &[Star] {
         &self.stars
     }

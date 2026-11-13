@@ -6,6 +6,8 @@ description = "Terminal starfield screensaver"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+crossterm = "0.29.0"
+signal-hook = "0.4.6"
 
 [dev-dependencies]
 assert_cmd = "2"
