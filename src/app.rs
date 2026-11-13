@@ -18,7 +18,7 @@ pub fn run<W: Write>(
     mut poll: impl FnMut(Duration) -> io::Result<Option<Event>>,
 ) -> io::Result<()> {
     while !stop.load(Ordering::Relaxed) {
-        render::draw(out, &render::frame(field), palette)?;
+        render::draw(out, field, palette)?;
         let end = Instant::now() + FRAME;
         while let Some(event) = poll(end.saturating_duration_since(Instant::now()))? {
             match event {

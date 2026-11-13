@@ -12,6 +12,7 @@ fn help_names_program_and_succeeds() {
         .stdout(contains("--help"))
         .stdout(contains("-C, --colour"))
         .stdout(contains("--christmas"))
+        .stdout(contains("-r, --rain"))
         .stdout(contains("--version"));
 }
 

@@ -17,8 +17,8 @@ pub enum Palette {
 const CHRISTMAS: [Color; 3] = [Color::Red, Color::Green, Color::White];
 
 impl Palette {
-    // Christmas picks by a position hash, so a star keeps its colour while it stays in its cell.
-    pub fn color(self, x: u16, y: u16) -> Color {
+    // Christmas picks by the star key, so a falling star keeps its colour.
+    pub fn color(self, key: u32) -> Color {
         match self {
             Palette::Green => Color::Green,
             Palette::Red => Color::Red,
@@ -29,7 +29,7 @@ impl Palette {
             Palette::Magenta => Color::Magenta,
             Palette::Black => Color::Black,
             Palette::Christmas => {
-                let mut h = (u64::from(y) << 16 | u64::from(x)).wrapping_mul(0xD6E8_FEB8_6659_FD93);
+                let mut h = u64::from(key).wrapping_mul(0xD6E8_FEB8_6659_FD93);
                 h ^= h >> 32;
                 CHRISTMAS[(h % CHRISTMAS.len() as u64) as usize]
             }
@@ -56,7 +56,7 @@ mod tests {
         ];
         for (name, palette, color) in names {
             assert_eq!(Palette::from_str(name, false), Ok(palette), "{name}");
-            assert_eq!(palette.color(3, 7), color, "{name}");
+            assert_eq!(palette.color(37), color, "{name}");
         }
         assert_eq!(
             Palette::from_str("christmas", false),
@@ -74,8 +74,8 @@ mod tests {
     #[test]
     fn christmas_mixes_only_red_green_white() {
         let mut seen = HashSet::new();
-        for i in 0..1000u16 {
-            let c = Palette::Christmas.color(i % 97, i / 97);
+        for key in 0..1000 {
+            let c = Palette::Christmas.color(key);
             assert!(CHRISTMAS.contains(&c), "{c:?}");
             seen.insert(format!("{c:?}"));
         }

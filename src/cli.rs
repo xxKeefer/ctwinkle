@@ -11,6 +11,10 @@ pub struct Args {
     /// Mix red, green, and white stars (same as -C christmas)
     #[arg(long, conflicts_with = "colour")]
     pub christmas: bool,
+
+    /// Rain mode: stars fall down the screen
+    #[arg(short = 'r', long)]
+    pub rain: bool,
 }
 
 impl Args {
@@ -52,6 +56,13 @@ mod tests {
             parse(&["-C", "christmas"]).unwrap().palette(),
             Palette::Christmas
         );
+    }
+
+    #[test]
+    fn rain_flag() {
+        assert!(!parse(&[]).unwrap().rain);
+        assert!(parse(&["-r"]).unwrap().rain);
+        assert!(parse(&["--rain"]).unwrap().rain);
     }
 
     #[test]

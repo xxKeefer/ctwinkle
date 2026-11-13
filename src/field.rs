@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Level {
     Dark,
     Dim,
@@ -13,17 +13,29 @@ const CYCLE: [Level; 5] = [
     Level::Dark,
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Twinkle,
+    Rain,
+}
+
 #[derive(Debug, Clone)]
 pub struct Star {
     pub x: u16,
     pub y: u16,
     stage: u8,
     wait: u8,
+    key: u32,
 }
 
 impl Star {
     pub fn level(&self) -> Level {
         CYCLE[self.stage as usize]
+    }
+
+    // Stable for the life of the star, so its glyph and colour do not change when it moves.
+    pub fn key(&self) -> u32 {
+        self.key
     }
 }
 
@@ -31,6 +43,7 @@ pub struct Field {
     w: u16,
     h: u16,
     density: u8,
+    mode: Mode,
     stars: Vec<Star>,
     taken: Vec<bool>,
     rng: u64,
@@ -44,6 +57,7 @@ impl Field {
             w,
             h,
             density,
+            mode: Mode::Twinkle,
             stars: Vec::new(),
             taken: vec![false; w as usize * h as usize],
             rng: seed,
@@ -60,6 +74,10 @@ impl Field {
         &self.stars
     }
 
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+    }
+
     pub fn tick(&mut self) {
         for i in 0..self.stars.len() {
             if self.stars[i].wait > 0 {
@@ -73,14 +91,61 @@ impl Field {
                 star.stage += 1;
                 continue;
             }
+            star.stage = 0;
+            // A rain star repeats its cycle while it falls.
+            if self.mode == Mode::Rain {
+                continue;
+            }
             let old = self.index(self.stars[i].x, self.stars[i].y);
             self.taken[old] = false;
             let (x, y) = self.free_cell();
+            let key = self.next_key();
             let star = &mut self.stars[i];
-            star.stage = 0;
             star.x = x;
             star.y = y;
+            star.key = key;
         }
+        if self.mode == Mode::Rain {
+            self.fall();
+        }
+    }
+
+    // Every star moves down one row. A star that leaves the bottom row comes back as a new
+    // star at row 0. Row 0 is empty after the move, so each new star finds a free column.
+    fn fall(&mut self) {
+        self.taken.fill(false);
+        let mut gone = Vec::new();
+        for i in 0..self.stars.len() {
+            self.stars[i].y += 1;
+            if self.stars[i].y < self.h {
+                let c = self.index(self.stars[i].x, self.stars[i].y);
+                self.taken[c] = true;
+            } else {
+                gone.push(i);
+            }
+        }
+        for i in gone {
+            let x = self.free_column();
+            let stage = self.below(CYCLE.len() as u32) as u8;
+            let key = self.next_key();
+            let star = &mut self.stars[i];
+            star.x = x;
+            star.y = 0;
+            star.stage = stage;
+            star.key = key;
+        }
+    }
+
+    // Claims a random free cell in row 0. The caller ensures one exists.
+    fn free_column(&mut self) -> u16 {
+        let w = self.w as usize;
+        let start = self.below(w as u32) as usize;
+        let x = (0..w)
+            .map(|k| (start + k) % w)
+            .find(|&c| !self.taken[c])
+            .expect("no free column");
+        self.taken[x] = true;
+        x as u16
     }
 
     pub fn resize(&mut self, w: u16, h: u16) {
@@ -107,7 +172,14 @@ impl Field {
             let (x, y) = self.free_cell();
             let stage = self.below(CYCLE.len() as u32) as u8;
             let wait = self.next_wait();
-            self.stars.push(Star { x, y, stage, wait });
+            let key = self.next_key();
+            self.stars.push(Star {
+                x,
+                y,
+                stage,
+                wait,
+                key,
+            });
         }
     }
 
@@ -132,6 +204,10 @@ impl Field {
 
     fn next_wait(&mut self) -> u8 {
         self.below(MAX_WAIT) as u8
+    }
+
+    fn next_key(&mut self) -> u32 {
+        self.below(u32::MAX)
     }
 
     // splitmix64
@@ -252,5 +328,70 @@ mod tests {
             f.tick();
         }
         assert_eq!(f.stars().len(), 1);
+    }
+
+    fn rain(w: u16, h: u16, density: u8, seed: u64) -> Field {
+        let mut f = Field::new(w, h, density, seed);
+        f.set_mode(Mode::Rain);
+        f
+    }
+
+    #[test]
+    fn rain_tick_moves_each_star_down_one_row() {
+        let mut f = rain(20, 10, 20, 11);
+        let mut entered = 0;
+        for _ in 0..50 {
+            let before: Vec<_> = f.stars().iter().map(|s| (s.x, s.y, s.key())).collect();
+            f.tick();
+            assert_eq!(f.stars().len(), before.len());
+            assert_valid(&f);
+            for (s, &(x, y, key)) in f.stars().iter().zip(&before) {
+                if y + 1 < f.h {
+                    assert_eq!((s.x, s.y, s.key()), (x, y + 1, key), "star did not fall");
+                } else {
+                    assert_eq!(s.y, 0, "new star entered below row 0");
+                    entered += 1;
+                }
+            }
+        }
+        assert!(entered > 0, "no star left the bottom row");
+    }
+
+    #[test]
+    fn rain_new_stars_enter_only_at_row_0() {
+        let mut f = rain(30, 12, 10, 4);
+        for _ in 0..50 {
+            let keys: HashSet<_> = f.stars().iter().map(|s| s.key()).collect();
+            f.tick();
+            for s in f.stars().iter().filter(|s| !keys.contains(&s.key())) {
+                assert_eq!(s.y, 0, "{s:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn rain_stars_keep_twinkling() {
+        let mut f = rain(20, 200, 5, 6);
+        let levels: HashSet<_> = (0..40)
+            .map(|_| {
+                f.tick();
+                f.stars[0].level()
+            })
+            .collect();
+        assert_eq!(levels.len(), 3, "{levels:?}");
+    }
+
+    #[test]
+    fn rain_tiny_sizes_do_not_panic() {
+        for (w, h) in [(0, 0), (1, 1), (0, 5), (5, 0), (5, 1), (1, 5)] {
+            let mut f = rain(w, h, 100, 1);
+            for _ in 0..20 {
+                f.tick();
+                assert_valid(&f);
+            }
+            f.resize(3, 3);
+            f.tick();
+            assert_valid(&f);
+        }
     }
 }

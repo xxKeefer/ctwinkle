@@ -8,7 +8,7 @@ mod term;
 
 use clap::Parser;
 use crossterm::{event, terminal};
-use field::Field;
+use field::{Field, Mode};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use std::io::{self, BufWriter};
 use std::sync::atomic::AtomicBool;
@@ -30,6 +30,9 @@ fn main() -> io::Result<()> {
         .duration_since(UNIX_EPOCH)
         .map_or(1, |d| d.as_nanos() as u64);
     let mut field = Field::new(w, h, DENSITY, seed);
+    if args.rain {
+        field.set_mode(Mode::Rain);
+    }
 
     let mut guard = term::Guard::new(BufWriter::new(io::stdout()))?;
     terminal::enable_raw_mode()?;

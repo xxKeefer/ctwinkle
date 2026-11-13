@@ -1,4 +1,4 @@
-use crate::field::{Field, Level};
+use crate::field::{Field, Level, Star};
 use crate::palette::Palette;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
@@ -12,31 +12,41 @@ pub const GLYPHS: [&[char]; 3] = [
     &['*', '✦', '✶', '✷', '✸', '✵', '✯', '★'],
 ];
 
-// A star keeps its cell for one twinkle cycle, so a position hash keeps its glyph stable.
-pub fn glyph(x: u16, y: u16, level: Level) -> char {
+// Keyed on the star, not its cell, so a falling star keeps its glyph.
+pub fn glyph(key: u32, level: Level) -> char {
     let group = GLYPHS[level as usize];
-    let mut h = (u64::from(x) << 16 | u64::from(y)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut h = u64::from(key).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     h ^= h >> 32;
     group[(h % group.len() as u64) as usize]
 }
 
-// One plain string per row, each exactly the field width.
-pub fn frame(field: &Field) -> Vec<String> {
+fn grid(field: &Field) -> Vec<Vec<Option<&Star>>> {
     let (w, h) = field.size();
-    let mut grid = vec![vec![' '; w as usize]; h as usize];
+    let mut grid = vec![vec![None; w as usize]; h as usize];
     for s in field.stars() {
-        grid[s.y as usize][s.x as usize] = glyph(s.x, s.y, s.level());
+        grid[s.y as usize][s.x as usize] = Some(s);
     }
-    grid.into_iter().map(String::from_iter).collect()
+    grid
 }
 
-pub fn draw<W: Write>(out: &mut W, rows: &[String], palette: Palette) -> io::Result<()> {
-    for (y, row) in rows.iter().enumerate() {
-        let y = y as u16;
-        queue!(out, MoveTo(0, y))?;
-        for (x, c) in row.chars().enumerate() {
-            if c != ' ' {
-                queue!(out, SetForegroundColor(palette.color(x as u16, y)))?;
+// One plain string per row, each exactly the field width.
+pub fn frame(field: &Field) -> Vec<String> {
+    grid(field)
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|s| s.map_or(' ', |s| glyph(s.key(), s.level())))
+                .collect()
+        })
+        .collect()
+}
+
+pub fn draw<W: Write>(out: &mut W, field: &Field, palette: Palette) -> io::Result<()> {
+    for (y, (row, stars)) in frame(field).iter().zip(grid(field)).enumerate() {
+        queue!(out, MoveTo(0, y as u16))?;
+        for (c, star) in row.chars().zip(stars) {
+            if let Some(s) = star {
+                queue!(out, SetForegroundColor(palette.color(s.key())))?;
             }
             queue!(out, Print(c))?;
         }
@@ -47,6 +57,7 @@ pub fn draw<W: Write>(out: &mut W, rows: &[String], palette: Palette) -> io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field::Mode;
     use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
     #[test]
@@ -68,13 +79,11 @@ mod tests {
     fn glyph_comes_from_its_level_group_and_uses_the_whole_group() {
         for level in [Level::Dark, Level::Dim, Level::Bright] {
             let mut seen = std::collections::HashSet::new();
-            for x in 0..40 {
-                for y in 0..40 {
-                    let g = glyph(x, y, level);
-                    assert!(group(level).contains(&g), "{level:?} gave {g:?}");
-                    assert_eq!(g, glyph(x, y, level), "glyph not stable");
-                    seen.insert(g);
-                }
+            for key in 0..1600 {
+                let g = glyph(key, level);
+                assert!(group(level).contains(&g), "{level:?} gave {g:?}");
+                assert_eq!(g, glyph(key, level), "glyph not stable");
+                seen.insert(g);
             }
             assert_eq!(seen.len(), group(level).len(), "{level:?} used {seen:?}");
         }
@@ -101,7 +110,7 @@ mod tests {
         let rows: Vec<Vec<char>> = frame(&f).iter().map(|r| r.chars().collect()).collect();
         for s in f.stars() {
             let c = rows[s.y as usize][s.x as usize];
-            assert_eq!(c, glyph(s.x, s.y, s.level()), "star at {},{}", s.x, s.y);
+            assert_eq!(c, glyph(s.key(), s.level()), "star at {},{}", s.x, s.y);
         }
         let lit = rows.iter().flatten().filter(|&&c| c != ' ').count();
         assert_eq!(lit, f.stars().len());
@@ -113,30 +122,92 @@ mod tests {
         String::from_utf8(b).unwrap()
     }
 
-    #[test]
-    fn draw_positions_each_row() {
-        let rows = vec!["a ".to_string(), " d".to_string()];
-        let mut buf = Vec::new();
-        draw(&mut buf, &rows, Palette::White).unwrap();
-        let s = String::from_utf8_lossy(&buf);
-        let white = fg(crossterm::style::Color::White);
-        assert!(s.contains(&format!("\x1b[1;1H{white}a ")), "{s:?}");
-        assert!(s.contains(&format!("\x1b[2;1H {white}d")), "{s:?}");
+    // The escape bytes for one row, built from the stars in the field.
+    fn expected_row(f: &Field, y: u16, palette: Palette) -> String {
+        let (w, _) = f.size();
+        let mut row = format!("\x1b[{};1H", y + 1);
+        for x in 0..w {
+            match f.stars().iter().find(|s| (s.x, s.y) == (x, y)) {
+                Some(s) => {
+                    row.push_str(&fg(palette.color(s.key())));
+                    row.push(glyph(s.key(), s.level()));
+                }
+                None => row.push(' '),
+            }
+        }
+        row
     }
 
     #[test]
-    fn draw_colours_each_star_by_its_cell() {
-        let rows: Vec<String> = (0..10).map(|_| "*".repeat(10)).collect();
-        let mut buf = Vec::new();
-        draw(&mut buf, &rows, Palette::Christmas).unwrap();
-        let s = String::from_utf8_lossy(&buf);
-        for y in 0..10u16 {
-            let mut row = format!("\x1b[{};1H", y + 1);
-            for x in 0..10u16 {
-                row.push_str(&fg(Palette::Christmas.color(x, y)));
-                row.push('*');
+    fn draw_positions_and_colours_each_row() {
+        for palette in [Palette::White, Palette::Christmas] {
+            let f = Field::new(12, 6, 40, 3);
+            let mut buf = Vec::new();
+            draw(&mut buf, &f, palette).unwrap();
+            let s = String::from_utf8_lossy(&buf);
+            for y in 0..6 {
+                assert!(s.contains(&expected_row(&f, y, palette)), "row {y}: {s:?}");
             }
-            assert!(s.contains(&row), "row {y}: {s:?}");
         }
+    }
+
+    // Reads `draw` output back into (colour escape, glyph) per cell.
+    fn cells(buf: &[u8]) -> Vec<Vec<(String, char)>> {
+        let s = String::from_utf8_lossy(buf);
+        let mut rows: Vec<Vec<(String, char)>> = Vec::new();
+        let mut colour = String::new();
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '\x1b' {
+                rows.last_mut().unwrap().push((colour.clone(), c));
+                continue;
+            }
+            let mut esc = String::from(c);
+            for e in chars.by_ref() {
+                esc.push(e);
+                if e.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            match esc.chars().last() {
+                Some('H') => rows.push(Vec::new()),
+                Some('m') => colour = esc,
+                _ => {}
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn falling_star_keeps_its_glyph_and_colour() {
+        let mut f = Field::new(10, 40, 10, 8);
+        f.set_mode(Mode::Rain);
+        let drawn = |f: &Field| {
+            let mut buf = Vec::new();
+            draw(&mut buf, f, Palette::Christmas).unwrap();
+            cells(&buf)
+        };
+        let mut checked = 0;
+        for _ in 0..30 {
+            let old = drawn(&f);
+            let before: Vec<_> = f.stars().iter().map(|s| (s.x, s.y, s.level())).collect();
+            f.tick();
+            let new = drawn(&f);
+            for (s, &(x, y, level)) in f.stars().iter().zip(&before) {
+                if (s.x, s.y) != (x, y + 1) {
+                    continue;
+                }
+                let (was, now) = (
+                    &old[y as usize][x as usize],
+                    &new[s.y as usize][s.x as usize],
+                );
+                assert_eq!(was.0, now.0, "colour changed while falling");
+                if s.level() == level {
+                    assert_eq!(was.1, now.1, "glyph changed while falling");
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 100, "{checked}");
     }
 }
